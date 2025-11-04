@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "domain_keyword": [
+        "appsflyer",
+        "cftunnel",
+        "argotunnel",
+        "zerotier",
+        "googlesyndication",
+        "googleadservices"
+      ]
+    }
+  ]
+}

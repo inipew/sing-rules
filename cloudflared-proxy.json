@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "domain": [
+        "region1.v2.argotunnel.com",
+        "region2.v2.argotunnel.com"
+      ],
+      "domain_suffix": "cftunnel.com",
+      "ip_cidr": [
+        "198.41.192.57/32",
+        "198.41.192.167/32",
+        "198.41.200.63/32"
+      ],
+      "port": 7844
+    },
+    {
+      "type": "logical",
+      "mode": "and",
+      "rules": [
+        {
+          "network": "udp"
+        },
+        {
+          "port": 7844
+        }
+      ]
+    }
+  ]
+}

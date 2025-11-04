@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "ip_cidr": [
+        "50.7.252.0/23",
+        "84.17.52.0/23",
+        "103.195.102.0/23",
+        "104.194.8.0/23"
+      ],
+      "port": [
+        43899,
+        9993
+      ]
+    },
+    {
+      "type": "logical",
+      "mode": "and",
+      "rules": [
+        {
+          "domain": "update.argotunnel.com",
+          "port": 443
+        },
+        {
+          "network": "tcp"
+        }
+      ]
+    }
+  ]
+}

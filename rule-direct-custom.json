@@ -1,0 +1,51 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "domain_suffix": [
+        ".getresponse.com",
+        ".bingx.com",
+        ".bb-os.com",
+        ".qq-os.com",
+        ".we-api.com",
+        ".aliyuncs.com",
+        ".polinema.ac.id",
+        ".ajaib.co.id",
+        ".iptunnels.com",
+        ".morenovel.net",
+        ".android.chat.openai.com",
+        ".whatismybrowser.com",
+        ".xdaforums.com",
+        ".docsachhay.net"
+      ],
+      "domain_keyword": [
+        "apkomik",
+        "komikav",
+        "cdnkomik",
+        "pojokmanga",
+        "kiryuu",
+        "komikcast",
+        "mangatale",
+        "ngomik",
+        "cosmicscans",
+        "hivescans",
+        "manhwalist",
+        "ikiru",
+        "cosmic",
+        "reaperscans",
+        "oracle",
+        "rizzfables",
+        "ainzscans",
+        "manhwa-freak",
+        "newtoki",
+        "novelcranel",
+        "yonglibrary",
+        "manhwatop",
+        "anichin",
+        "wuxiaworld",
+        "mgecko",
+        "mgeko"
+      ]
+    }
+  ]
+}
