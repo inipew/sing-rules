@@ -1,0 +1,201 @@
+name: Update Rule
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:           # Jangan trigger jika yang berubah hanya JSON hasil build
+      - "*.srs"
+  schedule:
+    - cron: "0 */6 * * *"  # Setiap 6 jam
+  workflow_dispatch:        # Trigger manual dari GitHub UI
+
+# Batalkan run lama jika ada run baru untuk branch yang sama
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write           # Untuk commit & push
+  actions: read
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Variabel global — ubah versi sing-box di sini saja
+# ──────────────────────────────────────────────────────────────────────────────
+env:
+  SINGBOX_VERSION: "1.14.0-alpha.28"
+  SINGBOX_ARCH: "linux-amd64"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy Rule Sets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30     # Paksa gagal jika lebih dari 30 menit (hang prevention)
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Python ───────────────────────────────────────────────────────────
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          # Tidak ada dependency pip tambahan, jadi tidak perlu cache pip
+
+      # ── 3. Cache sing-box binary ─────────────────────────────────────────────
+      - name: Cache sing-box binary
+        id: cache-sing-box
+        uses: actions/cache@v4
+        with:
+          path: ./sing-box
+          # Key berdasarkan versi + arsitektur — otomatis invalidate saat naik versi
+          key: sing-box-${{ env.SINGBOX_VERSION }}-${{ env.SINGBOX_ARCH }}
+
+      # ── 4. Download sing-box (hanya jika cache miss) ─────────────────────────
+      - name: Download sing-box
+        if: steps.cache-sing-box.outputs.cache-hit != 'true'
+        run: |
+          FILENAME="sing-box-${{ env.SINGBOX_VERSION }}-${{ env.SINGBOX_ARCH }}.tar.gz"
+          URL="https://github.com/SagerNet/sing-box/releases/download/v${{ env.SINGBOX_VERSION }}/${FILENAME}"
+          
+          echo "Downloading: ${URL}"
+          wget -q --show-progress "${URL}"
+          
+          # Ekstrak hanya binary sing-box, buang folder wrapper
+          tar -xzf "${FILENAME}" --strip-components=1 \
+            "$(tar -tf "${FILENAME}" | grep 'sing-box$')"
+          
+          chmod +x ./sing-box
+          rm -f "${FILENAME}"
+          
+          echo "sing-box version: $(./sing-box version)"
+
+      # ── 5. Verifikasi sing-box siap ──────────────────────────────────────────
+      - name: Verify sing-box binary
+        run: |
+          ./sing-box version
+          echo "SINGBOX_BIN=./sing-box" >> "$GITHUB_ENV"
+
+      # ── 6. Jalankan build script ─────────────────────────────────────────────
+      - name: Build rule sets
+        id: build
+        run: |
+          python build_rules.py --verbose
+        # Script sudah exit 1 jika ada kegagalan — langkah berikutnya otomatis skip
+
+      # ── 7. Upload artefak untuk debugging (selalu jalan, termasuk saat gagal) ─
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rule-sets-${{ github.run_number }}
+          path: |
+            *.srs
+            *.json
+          retention-days: 7
+          if-no-files-found: warn
+
+      # ── 8. Commit perubahan JSON ke branch main ──────────────────────────────
+      - name: Commit updated JSON files
+        if: success()
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+          
+          git add *.json
+          
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan JSON — skip commit."
+          else
+            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+            git commit -m "chore: update rule JSON [${TIMESTAMP}] [skip ci]"
+            git push origin main
+            echo "JSON berhasil di-commit dan di-push ke main."
+          fi
+
+      # ── 9. Publish .srs ke GitHub Release ───────────────────────────────────
+      - name: Publish SRS to Release
+        if: success()
+        uses: ncipollo/release-action@v1
+        with:
+          tag: srs-latest
+          name: "Sing-box Rules (latest)"
+          body: |
+            ## Sing-box Rule Sets — Build #${{ github.run_number }}
+
+            | Info | Value |
+            |------|-------|
+            | **Commit** | [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
+            | **Trigger** | `${{ github.event_name }}` |
+            | **sing-box** | `v${{ env.SINGBOX_VERSION }}` |
+            | **Waktu build** | `${{ github.event.head_commit.timestamp }}` |
+
+            > File `.srs` dapat digunakan langsung pada konfigurasi sing-box.
+          artifacts: "*.srs"
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 10. Deploy .srs ke branch release (orphan, bebas history) ───────────
+      - name: Deploy SRS to release branch
+        if: success()
+        run: |
+          # Kumpulkan semua .srs yang dihasilkan
+          SRS_FILES=$(ls *.srs 2>/dev/null | wc -l)
+          if [ "$SRS_FILES" -eq 0 ]; then
+            echo "Tidak ada file .srs — skip deploy ke release branch."
+            exit 0
+          fi
+
+          echo "Mendeploy ${SRS_FILES} file .srs ke branch release..."
+
+          # Simpan .srs ke direktori temporer
+          mkdir -p /tmp/srs-deploy
+          cp *.srs /tmp/srs-deploy/
+
+          # Checkout branch release atau buat sebagai orphan jika belum ada
+          if git ls-remote --exit-code --heads origin release > /dev/null 2>&1; then
+            git fetch origin release
+            git checkout release
+            git pull origin release
+          else
+            echo "Branch release belum ada — membuat orphan branch..."
+            git checkout --orphan release
+            git rm -rf . --quiet
+          fi
+
+          # Hapus .srs lama, copy yang baru
+          rm -f *.srs
+          cp /tmp/srs-deploy/*.srs .
+
+          # Commit dan push
+          git add *.srs
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan .srs — skip commit."
+          else
+            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+            git commit -m "deploy: update SRS files [${TIMESTAMP}] [skip ci]"
+            git push origin release
+            echo "SRS berhasil di-deploy ke branch release."
+          fi
+
+          # Kembali ke branch asal
+          git checkout main
+
+      # ── 11. Ringkasan akhir ──────────────────────────────────────────────────
+      - name: Build summary
+        if: always()
+        run: |
+          echo "### Status Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.build.outcome }}" == "success" ]; then
+            echo "✅ Build berhasil — $(ls *.srs 2>/dev/null | wc -l) file SRS dihasilkan." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Build gagal — periksa log langkah 'Build rule sets'." >> "$GITHUB_STEP_SUMMARY"
+          fi
