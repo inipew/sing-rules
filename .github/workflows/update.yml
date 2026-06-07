@@ -1,0 +1,358 @@
+name: Update Rule
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "*.srs"
+      - "*.json"
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  CACHE_VERSION: "v1"
+  GO_VERSION: "1.25.10"
+  GOFLAGS: -buildvcs=false
+  GOMODCACHE: /home/runner/go/pkg/mod
+  GOCACHE: /home/runner/.cache/go-build
+  GOPROXY: https://proxy.golang.org,direct
+  GOSUMDB: sum.golang.org
+  BUILD_TAGS: "with_warp,with_masque,with_gvisor,with_dhcp,with_wireguard,with_clash_api,with_quic,with_utls,badlinkname,tfogo_checklinkname0"
+  GOOS: linux
+  GOARCH: amd64
+  GOAMD64: v3
+  CGO_ENABLED: 1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Job 1: Resolve SHA ────────────────────────────────────────────────────────
+  resolve-sha:
+    name: Resolve sing-box SHA
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.get-sha.outputs.sha }}
+    steps:
+      - name: Get latest commit SHA of sing-box ref1nd
+        id: get-sha
+        run: |
+          for i in 1 2 3; do
+            SHA=$(git ls-remote https://github.com/inipew/sing-box.git refs/heads/ref1nd 2>/dev/null | cut -f1)
+            [ -n "$SHA" ] && break
+            echo "Attempt $i gagal, retry dalam $((i * 5))s..."
+            sleep $((i * 5))
+          done
+          if [ -z "$SHA" ]; then
+            echo "::error::Gagal mendapatkan SHA dari remote setelah 3 percobaan."
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved SHA: $SHA"
+
+  # ── Job 2: Warm sing-box binary cache ─────────────────────────────────────────
+  # Mirip pola warm-gotip di build-binary.yml — berjalan paralel dengan job lain,
+  # memastikan binary sudah ter-cache sebelum build-and-deploy membutuhkannya.
+  warm-sing-box:
+    name: Warm sing-box Cache
+    runs-on: ubuntu-latest
+    needs: resolve-sha
+    steps:
+      - name: Set up Go
+        id: setup-go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+          cache: false
+
+      - name: Restore sing-box binary cache
+        id: cache-sing-box
+        uses: actions/cache@v4
+        with:
+          path: ./sing-box
+          key: ${{ env.CACHE_VERSION }}-sing-box-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ needs.resolve-sha.outputs.sha }}-amd64v3-cgo${{ env.CGO_ENABLED }}
+
+      - name: Restore Go module cache
+        if: steps.cache-sing-box.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.GOMODCACHE }}
+          key: ${{ env.CACHE_VERSION }}-gomod-${{ runner.os }}-${{ needs.resolve-sha.outputs.sha }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-gomod-${{ runner.os }}-
+
+      - name: Restore Go build cache
+        if: steps.cache-sing-box.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.GOCACHE }}
+          key: ${{ env.CACHE_VERSION }}-gobuild-${{ runner.os }}-linux-amd64-v3-${{ needs.resolve-sha.outputs.sha }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-gobuild-${{ runner.os }}-linux-amd64-v3-
+            ${{ env.CACHE_VERSION }}-gobuild-${{ runner.os }}-linux-amd64-
+            ${{ env.CACHE_VERSION }}-gobuild-${{ runner.os }}-linux-
+
+      - name: Build sing-box (jika cache miss)
+        if: steps.cache-sing-box.outputs.cache-hit != 'true'
+        run: |
+          echo "Cache miss — building sing-box (Linux AMD64v3, CGO=$CGO_ENABLED)..."
+          git clone --depth 1 --branch ref1nd https://github.com/inipew/sing-box.git sing-box-src
+          cd sing-box-src
+
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
+          echo "Building version: $VERSION"
+
+          go build \
+            -v \
+            -trimpath \
+            -tags "${{ env.BUILD_TAGS }}" \
+            -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -s -w -buildid= -checklinkname=0" \
+            -o ../sing-box \
+            ./cmd/sing-box
+
+          cd ..
+          rm -rf sing-box-src
+
+          if [ ! -f ./sing-box ]; then
+            echo "::error::Binary tidak dihasilkan."
+            exit 1
+          fi
+          chmod +x ./sing-box
+          echo "Build selesai: $(du -sh ./sing-box | cut -f1)"
+
+      - name: Verify binary
+        run: |
+          if [ ! -x "./sing-box" ]; then
+            echo "::error::Binary sing-box tidak ditemukan atau tidak executable."
+            exit 1
+          fi
+          ./sing-box version
+          echo "::notice::Cache hit: ${{ steps.cache-sing-box.outputs.cache-hit }}"
+
+  # ── Job 3: Build & Deploy ─────────────────────────────────────────────────────
+  build-and-deploy:
+    name: Build & Deploy Rule Sets
+    runs-on: ubuntu-latest
+    needs: [resolve-sha, warm-sing-box]
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Python ──────────────────────────────────────────────────────────────
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ── 3. Set up Go ───────────────────────────────────────────────────────────
+      - name: Set up Go
+        id: setup-go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+          cache: false
+
+      # ── 4. Restore sing-box binary (pasti hit karena warm-sing-box sudah jalan) ─
+      - name: Restore sing-box binary cache
+        id: cache-sing-box
+        uses: actions/cache@v4
+        with:
+          path: ./sing-box
+          key: ${{ env.CACHE_VERSION }}-sing-box-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ needs.resolve-sha.outputs.sha }}-amd64v3-cgo${{ env.CGO_ENABLED }}
+
+      # ── 5. Fallback build jika cache unexpectedly miss ─────────────────────────
+      - name: Build sing-box (fallback)
+        if: steps.cache-sing-box.outputs.cache-hit != 'true'
+        run: |
+          echo "::warning::Cache miss tak terduga — fallback build..."
+          git clone --depth 1 --branch ref1nd https://github.com/inipew/sing-box.git sing-box-src
+          cd sing-box-src
+
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
+
+          go build \
+            -v \
+            -trimpath \
+            -tags "${{ env.BUILD_TAGS }}" \
+            -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -s -w -buildid= -checklinkname=0" \
+            -o ../sing-box \
+            ./cmd/sing-box
+
+          cd ..
+          rm -rf sing-box-src
+          chmod +x ./sing-box
+
+      # ── 6. Verify binary & export version ─────────────────────────────────────
+      - name: Verify binary and export version
+        run: |
+          if [ ! -x "./sing-box" ]; then
+            echo "::error::Binary sing-box tidak ditemukan atau tidak executable."
+            exit 1
+          fi
+          ./sing-box version
+          VERSION=$(./sing-box version | head -n 1 | awk '{print $3}')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Gagal parse versi dari output sing-box."
+            exit 1
+          fi
+          echo "SINGBOX_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Verified: sing-box v${VERSION}"
+
+      # ── 7. Build rule sets ─────────────────────────────────────────────────────
+      - name: Build rule sets
+        id: build
+        run: python build_rules.py --verbose
+
+      # ── 8. Upload artifacts untuk debugging ────────────────────────────────────
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rule-sets-${{ github.run_number }}
+          path: |
+            *.srs
+            *.json
+          retention-days: 7
+          if-no-files-found: warn
+
+      # ── 9. Commit perubahan JSON ke main ───────────────────────────────────────
+      - name: Commit updated JSON files
+        if: success()
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name  "github-actions[bot]"
+
+          git add *.json
+
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan JSON — skip commit."
+            echo "JSON_CHANGED=false" >> "$GITHUB_ENV"
+          else
+            JSON_COUNT=$(git diff --cached --name-only | wc -l | tr -d ' ')
+            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+            git commit -m "chore: update rule JSON [${TIMESTAMP}] [skip ci]"
+            git push origin main
+            echo "JSON_CHANGED=true" >> "$GITHUB_ENV"
+            echo "JSON_COUNT=${JSON_COUNT}" >> "$GITHUB_ENV"
+            echo "${JSON_COUNT} file JSON berhasil di-commit ke main."
+          fi
+
+      # ── 10. Publish .srs ke GitHub Release ────────────────────────────────────
+      - name: Publish SRS to Release
+        if: success()
+        uses: ncipollo/release-action@v1
+        with:
+          tag: srs-latest
+          name: "Sing-box Rules (latest)"
+          body: |
+            ## Sing-box Rule Sets — Build #${{ github.run_number }}
+
+            | Info | Value |
+            |------|-------|
+            | **Commit** | [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
+            | **Trigger** | `${{ github.event_name }}` |
+            | **sing-box** | `v${{ env.SINGBOX_VERSION }}` |
+            | **Waktu build** | `${{ github.event.head_commit.timestamp }}` |
+
+            > File `.srs` dapat digunakan langsung pada konfigurasi sing-box.
+          artifacts: "*.srs"
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 11. Deploy .srs ke branch release ─────────────────────────────────────
+      - name: Deploy SRS to release branch
+        if: success()
+        run: |
+          SRS_FILES=$(ls *.srs 2>/dev/null | wc -l)
+          if [ "$SRS_FILES" -eq 0 ]; then
+            echo "Tidak ada file .srs — skip deploy ke release branch."
+            exit 0
+          fi
+
+          echo "Mendeploy ${SRS_FILES} file .srs ke branch release..."
+          MAIN_SHA=$(git rev-parse HEAD)
+
+          # Simpan .srs DAN binary ke luar working tree
+          mkdir -p /tmp/srs-deploy /tmp/sing-box-backup
+          cp *.srs /tmp/srs-deploy/
+          cp ./sing-box /tmp/sing-box-backup/
+
+          # Bersihkan untracked/modified files agar checkout bersih
+          git clean -fd
+          git checkout -- .
+
+          if git ls-remote --exit-code --heads origin release > /dev/null 2>&1; then
+            git fetch origin release
+            git checkout -B release origin/release
+          else
+            echo "Branch release belum ada — membuat orphan branch..."
+            git checkout --orphan release
+            git rm -rf . --quiet
+          fi
+
+          rm -f *.srs
+          cp /tmp/srs-deploy/*.srs .
+
+          git add *.srs
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan .srs — skip commit."
+          else
+            TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
+            git commit -m "deploy: update SRS files [${TIMESTAMP}] [skip ci]"
+            git push origin release
+            echo "SRS berhasil di-deploy ke branch release."
+          fi
+
+          # Kembali ke main dan restore binary
+          git checkout "$MAIN_SHA"
+          cp /tmp/sing-box-backup/sing-box ./sing-box
+          chmod +x ./sing-box
+
+      # ── 12. Build summary ──────────────────────────────────────────────────────
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "### Status Build #${{ github.run_number }}"
+            echo ""
+            echo "| Item | Detail |"
+            echo "|------|--------|"
+            echo "| **Trigger** | \`${{ github.event_name }}\` |"
+            echo "| **sing-box** | \`v${SINGBOX_VERSION:-unknown}\` |"
+            echo "| **sing-box SHA** | \`${{ needs.resolve-sha.outputs.sha }}\` |"
+            echo "| **Binary cache** | \`${{ steps.cache-sing-box.outputs.cache-hit }}\` |"
+            echo "| **Target** | \`linux/amd64v3 CGO=${{ env.CGO_ENABLED }}\` |"
+
+            if [ "${{ steps.build.outcome }}" == "success" ]; then
+              SRS_COUNT=$(find /tmp/srs-deploy -name "*.srs" 2>/dev/null | wc -l)
+              JSON_COUNT=$(find /tmp -maxdepth 1 -name "*.json" 2>/dev/null | wc -l || echo "0")
+              echo "| **SRS dihasilkan** | ${SRS_COUNT} file |"
+              echo "| **JSON dihasilkan** | ${JSON_COUNT} file |"
+              echo ""
+              echo "✅ Build berhasil."
+            else
+              echo ""
+              echo "❌ Build gagal — periksa log langkah \`Build rule sets\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,36 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain_suffix": [
+        "dana.id",
+        "doku.com",
+        "flip.id",
+        "gobiz.co.id",
+        "gojek.com",
+        "gopay.com",
+        "grab.com",
+        "grabtaxi.com",
+        "i-saku.com",
+        "linkaja.id",
+        "octoclicks.co.id",
+        "ovo.id",
+        "shopeepay.co.id"
+      ],
+      "domain_keyword": [
+        "dana",
+        "doku",
+        "gobiz",
+        "gojek",
+        "gopay",
+        "grab",
+        "grabtaxi",
+        "i-saku",
+        "linkaja",
+        "octoclicks",
+        "ovo",
+        "shopeepay"
+      ]
+    }
+  ]
+}

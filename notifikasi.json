@@ -1,0 +1,78 @@
+{
+  "version": 3,
+  "rules": [
+    {
+      "domain": [
+        "android.clients.google.com",
+        "connectivitycheck.gstatic.com",
+        "fcm.googleapis.com",
+        "fcm-xmpp.googleapis.com",
+        "device-messaging.googleapis.com",
+        "android.apis.google.com",
+        "device-provisioning.googleapis.com",
+        "firebaseinstallations.googleapis.com"
+      ],
+      "domain_regex": [
+        "^(alt[0-9]-)?mtalk\\.google\\.com$",
+        "^alt[0-9]\\.mobile-gtalk[0-9]\\.l\\.google\\.com$"
+      ]
+    },
+    {
+      "domain_suffix": [
+        ".push.apple.com",
+        ".apple-dns.net"
+      ],
+      "domain_regex": "^[0-9]-courier\\.push\\.apple\\.com$",
+      "ip_cidr": "17.0.0.0/8"
+    },
+    {
+      "domain": [
+        "login.microsoftonline.com",
+        "login.live.com",
+        "logincdn.msauth.net",
+        "account.microsoft.com",
+        "developer.microsoft.com"
+      ],
+      "domain_suffix": [
+        ".msauth.net",
+        ".msftauth.net",
+        ".microsoftonline.com",
+        ".aadcdn.microsoftonline-p.com",
+        ".notify.windows.com",
+        ".wns.windows.com"
+      ]
+    },
+    {
+      "domain": [
+        "imap.gmail.com",
+        "smtp.gmail.com",
+        "pop.gmail.com",
+        "outlook.office365.com",
+        "smtp.office365.com"
+      ],
+      "domain_suffix": [
+        ".gmail.com",
+        ".office365.com"
+      ]
+    },
+    {
+      "domain": "push.services.mozilla.com",
+      "domain_suffix": ".push.hicloud.com"
+    },
+    {
+      "type": "logical",
+      "mode": "and",
+      "rules": [
+        {
+          "domain": [
+            "oauth2.googleapis.com",
+            "accounts.google.com"
+          ]
+        },
+        {
+          "port": 443
+        }
+      ]
+    }
+  ]
+}
