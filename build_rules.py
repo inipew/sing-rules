@@ -42,7 +42,7 @@ LOCAL_JSON_FILES: list[str] = [
     "cloudflared-direct.json", "cloudflared-proxy.json", "commonports.json",
     "direct-some-web.json",    "geosite-doh.json",       "hilook.json",
     "notifikasi.json",         "rule-direct-custom.json","rule-port-game.json",
-    "wa_local.json",           "warped.json",
+    "port-games.json",         "wa_local.json",           "warped.json",
 ]
 
 # Port filter untuk geoip-onlyid
