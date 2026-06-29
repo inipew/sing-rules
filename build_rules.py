@@ -28,6 +28,7 @@ SINGBOX_VERSION: str = os.environ.get("SINGBOX_VERSION", "1.14.0-alpha.28")
 DOWNLOADS: dict[str, str] = {
     "adguard.txt":               "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
     "adguard-custom.txt":        "https://raw.githubusercontent.com/ppfeufer/adguard-filter-list/master/blocklist",
+    "doh.json":                  "https://raw.githubusercontent.com/malikshi/route/refs/heads/release/srs/json/doh.json",
     "geoip-asnid.json":          "https://raw.githubusercontent.com/malikshi/route/refs/heads/release/srs/json/geoip-asnid.json",
     "geoip-id.json":             "https://raw.githubusercontent.com/malikshi/route/refs/heads/release/srs/json/geoip-id.json",
     "geoip-facebook.srs":        "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/sing/geo/geoip/facebook.srs",
@@ -40,9 +41,10 @@ DOWNLOADS: dict[str, str] = {
 # Berkas JSON lokal yang sudah ada di repo (tidak diunduh)
 LOCAL_JSON_FILES: list[str] = [
     "cloudflared-direct.json", "cloudflared-proxy.json", "commonports.json",
-    "direct-some-web.json",    "geosite-doh.json",       "hilook.json",
-    "notifikasi.json",         "rule-direct-custom.json","rule-port-game.json",
-    "port-games.json",         "wa_local.json",           "warped.json",
+    "direct-some-web.json",    "geoip-doh.json",         "geosite-doh.json",
+    "hilook.json",             "notifikasi.json",         "rule-direct-custom.json",
+    "rule-port-game.json",     "port-games.json",         "wa_local.json",
+    "warped.json",
 ]
 
 # Port filter untuk geoip-onlyid
@@ -393,13 +395,69 @@ def step_convert_and_decompile(dry_run: bool) -> None:
     gha_endgroup()
 
 
+def step_build_doh(dry_run: bool) -> None:
+    gha_group("Langkah 2b: Pemisahan doh.json")
+    log.info("=" * 55)
+    log.info("LANGKAH 2b: Pemisahan doh.json")
+    log.info("=" * 55)
+
+    if not Path("doh.json").exists():
+        log.warning("  Dilewati: doh.json tidak ditemukan")
+        gha_endgroup()
+        return
+
+    doh = load_json_safe("doh.json")
+    if not doh:
+        log.error("  Gagal memuat doh.json — langkah dilewati.")
+        gha_error("doh.json tidak valid atau tidak bisa dimuat")
+        gha_endgroup()
+        return
+
+    rules = doh.get("rules", [])
+    if not rules:
+        log.error("  Tidak ada rules di doh.json — langkah dilewati.")
+        gha_endgroup()
+        return
+
+    rule = rules[0]
+    domain_suffixes = rule.get("domain_suffix", [])
+    ip_cidrs = rule.get("ip_cidr", [])
+
+    geosite_doh = {
+        "version": 3,
+        "rules": [
+            {
+                "domain_suffix": domain_suffixes
+            }
+        ]
+    }
+
+    geoip_doh = {
+        "version": 3,
+        "rules": [
+            {
+                "ip_cidr": ip_cidrs
+            }
+        ]
+    }
+
+    if not dry_run:
+        write_json("geosite-doh.json", geosite_doh)
+        log.info("  Dibuat: geosite-doh.json")
+        write_json("geoip-doh.json", geoip_doh)
+        log.info("  Dibuat: geoip-doh.json")
+
+    remove_files(["doh.json"])
+    gha_endgroup()
+
+
 def step_format_json(dry_run: bool) -> None:
     gha_group("Langkah 3: Format Berkas JSON")
     log.info("=" * 55)
     log.info("LANGKAH 3: Format Berkas JSON")
     log.info("=" * 55)
 
-    downloaded_json = [f for f in DOWNLOADS if f.endswith(".json")]
+    downloaded_json = [f for f in DOWNLOADS if f.endswith(".json") and f != "doh.json"]
     all_targets = LOCAL_JSON_FILES + downloaded_json + ["geoip-facebook.json"]
 
     for filepath in all_targets:
@@ -515,7 +573,7 @@ def step_compile_all(dry_run: bool) -> None:
 
     # Berkas yang diunduh sebagai .txt dikonversi menjadi .json
     downloaded_json = [f.replace(".txt", ".json") for f in DOWNLOADS if f.endswith(".txt")]
-    downloaded_json += [f for f in DOWNLOADS if f.endswith(".json")]
+    downloaded_json += [f for f in DOWNLOADS if f.endswith(".json") and f != "doh.json"]
 
     all_targets: list[str] = sorted(set(
         LOCAL_JSON_FILES
@@ -588,6 +646,7 @@ def main() -> None:
             log.info("Download dilewati (--skip-download).")
 
         step_convert_and_decompile(args.dry_run)
+        step_build_doh(args.dry_run)
         step_format_json(args.dry_run)
         step_build_geoip_onlyid(args.dry_run)
         step_build_wa_local(args.dry_run)
