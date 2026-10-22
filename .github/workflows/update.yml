@@ -20,9 +20,9 @@ permissions:
   actions: read
 
 env:
-  PYTHON_VERSION: "3.12"
+  PYTHON_VERSION: "3.15"
   CACHE_VERSION: "v1"
-  GO_VERSION: "1.25.10"
+  GO_VERSION: "1.26.8"
   GOFLAGS: -buildvcs=false
   GOMODCACHE: /home/runner/go/pkg/mod
   GOCACHE: /home/runner/.cache/go-build
