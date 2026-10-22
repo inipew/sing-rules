@@ -46,7 +46,7 @@ class AppConfig:
         "direct-some-web.json",    "geoip-doh.json",         "geosite-doh.json",
         "hilook.json",             "notifikasi.json",         "rule-direct-custom.json",
         "rule-port-game.json",     "port-games.json",         "wa_local.json",
-        "warped.json",
+        "warped.json",             "rule-coc.json",
     ])
 
     onlyid_ports: list[int] = field(default_factory=lambda: sorted([

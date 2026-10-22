@@ -1,0 +1,15 @@
+
+{
+  "version": 3,
+  "rules": [
+    {
+      "network": [
+        "tcp",
+        "udp"
+      ],
+      "port_range": [
+        "9330:9340"
+      ]
+    }
+  ]
+}
