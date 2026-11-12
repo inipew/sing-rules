@@ -47,6 +47,7 @@ class AppConfig:
         "hilook.json",             "notifikasi.json",         "rule-direct-custom.json",
         "rule-port-game.json",     "port-games.json",         "wa_local.json",
         "warped.json",             "rule-coc.json",           "rule-port-mlbb.json",
+        "google.json",             "youtube.json",
     ])
 
     onlyid_ports: list[int] = field(default_factory=lambda: sorted([
