@@ -2,9 +2,7 @@
   "version": 3,
   "rules": [
     {
-      "domain": [
-        "yt3.googleusercontent.com"
-      ],
+      "domain": "yt3.googleusercontent.com",
       "domain_suffix": [
         "ads.youtube.com",
         "ggpht.cn",
