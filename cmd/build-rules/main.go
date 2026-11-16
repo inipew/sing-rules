@@ -236,6 +236,7 @@ func firstRule(doc map[string]any)(map[string]any,error) {
 }
 func (b *builder) convertAndDecompile() {
 	group("Langkah 2: Konversi AdGuard & Decompile Facebook"); defer endGroup()
+	if b.dry { log.Println("[DRY-RUN] Konversi dan decompile dilewati tanpa mengubah sumber."); return }
 	for _,item:=range []struct{file,kind string}{{"adguard-custom.txt","adguard"},{"adguard.txt","adguard"}} {
 		if _,err:=os.Stat(b.path(item.file)); err!=nil { log.Printf("WARNING skip missing %s",item.file); continue }
 		if err:=b.cli.convert(item.kind,item.file);err!=nil { b.stats.fail("convert "+item.file, err); continue }
