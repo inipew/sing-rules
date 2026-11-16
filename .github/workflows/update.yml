@@ -213,7 +213,9 @@ jobs:
       # ── 7. Build rule sets ─────────────────────────────────────────────────────
       - name: Build rule sets (Go)
         id: build
-        run: go run ./cmd/build-rules --verbose
+        run: |
+          go test ./...
+          go run ./cmd/build-rules --verbose
 
       # ── 8. Upload artifacts untuk debugging ────────────────────────────────────
       - name: Upload build artifacts
