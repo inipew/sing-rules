@@ -218,9 +218,9 @@ jobs:
           echo "Verified: sing-box v${VERSION}"
 
       # ── 7. Build rule sets ─────────────────────────────────────────────────────
-      - name: Build rule sets
+      - name: Build rule sets (Go)
         id: build
-        run: python build_rules.py --verbose
+        run: go run ./cmd/build-rules --verbose
 
       # ── 8. Upload artifacts untuk debugging ────────────────────────────────────
       - name: Upload build artifacts
