@@ -20,7 +20,6 @@ permissions:
   actions: read
 
 env:
-  PYTHON_VERSION: "3.15"
   CACHE_VERSION: "v1"
   GO_VERSION: "1.26.8"
   GOFLAGS: -buildvcs=false
@@ -156,13 +155,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      # ── 2. Python ──────────────────────────────────────────────────────────────
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # ── 3. Set up Go ───────────────────────────────────────────────────────────
+      # ── 2. Set up Go ───────────────────────────────────────────────────────────
       - name: Set up Go
         id: setup-go
         uses: actions/setup-go@v6
@@ -171,7 +164,7 @@ jobs:
           check-latest: false
           cache: false
 
-      # ── 4. Restore sing-box binary (pasti hit karena warm-sing-box sudah jalan) ─
+      # ── 3. Restore sing-box binary (pasti hit karena warm-sing-box sudah jalan) ─
       - name: Restore sing-box binary cache
         id: cache-sing-box
         uses: actions/cache@v4
@@ -179,7 +172,7 @@ jobs:
           path: ./sing-box
           key: ${{ env.CACHE_VERSION }}-sing-box-${{ runner.os }}-go${{ steps.setup-go.outputs.go-version }}-${{ needs.resolve-sha.outputs.sha }}-amd64v3-cgo${{ env.CGO_ENABLED }}
 
-      # ── 5. Fallback build jika cache unexpectedly miss ─────────────────────────
+      # ── 4. Fallback build jika cache unexpectedly miss ─────────────────────────
       - name: Build sing-box (fallback)
         if: steps.cache-sing-box.outputs.cache-hit != 'true'
         run: |
@@ -201,7 +194,7 @@ jobs:
           rm -rf sing-box-src
           chmod +x ./sing-box
 
-      # ── 6. Verify binary & export version ─────────────────────────────────────
+      # ── 5. Verify binary & export version ─────────────────────────────────────
       - name: Verify binary and export version
         run: |
           if [ ! -x "./sing-box" ]; then
@@ -217,12 +210,14 @@ jobs:
           echo "SINGBOX_VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "Verified: sing-box v${VERSION}"
 
-      # ── 7. Build rule sets ─────────────────────────────────────────────────────
-      - name: Build rule sets
+      # ── 6. Build rule sets ─────────────────────────────────────────────────────
+      - name: Build rule sets (Go)
         id: build
-        run: python build_rules.py --verbose
+        run: |
+          go test ./...
+          go run ./cmd/build-rules --verbose
 
-      # ── 8. Upload artifacts untuk debugging ────────────────────────────────────
+      # ── 7. Upload artifacts untuk debugging ────────────────────────────────────
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -234,7 +229,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      # ── 9. Commit perubahan JSON ke main ───────────────────────────────────────
+      # ── 8. Commit perubahan JSON ke main ───────────────────────────────────────
       - name: Commit updated JSON files
         if: success()
         run: |
@@ -256,7 +251,7 @@ jobs:
             echo "${JSON_COUNT} file JSON berhasil di-commit ke main."
           fi
 
-      # ── 10. Publish .srs ke GitHub Release ────────────────────────────────────
+      # ── 9. Publish .srs ke GitHub Release ────────────────────────────────────
       - name: Publish SRS to Release
         if: success()
         uses: ncipollo/release-action@v1
@@ -280,7 +275,7 @@ jobs:
           makeLatest: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 11. Deploy .srs ke branch release ─────────────────────────────────────
+      # ── 10. Deploy .srs ke branch release ─────────────────────────────────────
       - name: Deploy SRS to release branch
         if: success()
         run: |
@@ -329,7 +324,7 @@ jobs:
           cp /tmp/sing-box-backup/sing-box ./sing-box
           chmod +x ./sing-box
 
-      # ── 12. Build summary ──────────────────────────────────────────────────────
+      # ── 11. Build summary ──────────────────────────────────────────────────────
       - name: Build summary
         if: always()
         run: |
