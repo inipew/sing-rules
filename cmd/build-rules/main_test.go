@@ -122,3 +122,18 @@ func TestConvertAndDecompileDryRunKeepsInputs(t *testing.T) {
 		t.Fatalf("dry-run removed input file: %v", err)
 	}
 }
+
+func TestDryRunMissingInputsDoesNotFail(t *testing.T) {
+	b := &builder{
+		cfg: config{output: t.TempDir()},
+		cli: &cli{bin: "unused", dry: true},
+		stats: &stats{},
+		dry: true,
+	}
+	b.buildDoH()
+	b.buildOnlyID()
+	b.buildWALocal()
+	if b.stats.failed() {
+		t.Fatal("missing inputs during dry-run must not be reported as build failures")
+	}
+}
