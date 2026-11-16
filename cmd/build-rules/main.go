@@ -194,11 +194,17 @@ func (d *downloader) all(ctx context.Context,sources map[string]string,workers i
 type cli struct { bin,dir string; dry bool }
 func (c *cli) check() error {
 	if c.dry { return nil }
-	if strings.ContainsRune(c.bin,filepath.Separator) {
-		if _,err:=os.Stat(c.bin); err!=nil { return fmt.Errorf("sing-box binary not found: %s",c.bin) }
+	if strings.ContainsRune(c.bin, filepath.Separator) {
+		resolved, err := filepath.Abs(c.bin)
+		if err != nil { return fmt.Errorf("resolve sing-box binary: %w", err) }
+		if _, err := os.Stat(resolved); err != nil { return fmt.Errorf("sing-box binary not found: %s", c.bin) }
+		c.bin = resolved
 		return nil
 	}
-	_,err:=exec.LookPath(c.bin); if err!=nil { return fmt.Errorf("sing-box binary not found: %s",c.bin) }; return nil
+	resolved, err := exec.LookPath(c.bin)
+	if err != nil { return fmt.Errorf("sing-box binary not found: %s", c.bin) }
+	c.bin = resolved
+	return nil
 }
 func (c *cli) run(args ...string) error {
 	if c.dry { log.Printf("[DRY-RUN] %s %s",c.bin,strings.Join(args," ")); return nil }
