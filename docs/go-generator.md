@@ -23,7 +23,7 @@ Supported flags:
 
 - `--skip-download`: use source files already present in the output directory.
 - `--only-compile`: only compile existing JSON rule sets to SRS.
-- `--dry-run`: log planned downloads and sing-box commands without changing files.
+- `--dry-run`: log planned downloads and sing-box commands without changing files or deleting source inputs. Missing files that would normally be downloaded are skipped during the simulation.
 - `--fail-fast`: stop after a failed source download.
 - `--workers N`: maximum concurrent source downloads.
 - `--verbose` / `-v`: include debug-level runtime information.
@@ -47,5 +47,6 @@ Environment variables:
 - Generated rule-set JSON retains sing-box rule-set version 3; source GeoIP JSON may use a different
   input version and is passed through the sing-box formatter before compilation.
 
-Downloads are validated before being atomically moved into place. Invalid or empty GeoIP source
-responses do not overwrite the last usable file. The generator uses only the Go standard library.
+Downloads are validated before being atomically moved into place. Invalid, empty, or CIDR-invalid GeoIP source
+responses do not overwrite the last usable file. Failed conversion, decompilation, formatting, or generated-rule
+steps are recorded and make the build exit non-zero. The generator uses only the Go standard library.
