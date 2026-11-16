@@ -62,7 +62,7 @@ func env(key, fallback string) string {
 }
 
 type resultStats struct {
-	downloaded, downloadFailed, compiled, compileFailed, skipped []string
+	downloaded, downloadFailed, compiled, compileFailed, skipped, stageFailed []string
 }
 type stats struct {
 	mu sync.Mutex
@@ -80,11 +80,18 @@ func (s *stats) snapshot() resultStats {
 		compiled: append([]string(nil), s.compiled...),
 		compileFailed: append([]string(nil), s.compileFailed...),
 		skipped: append([]string(nil), s.skipped...),
+		stageFailed: append([]string(nil), s.stageFailed...),
 	}
 }
 func (s *stats) failed() bool {
 	v := s.snapshot()
-	return len(v.downloadFailed)+len(v.compileFailed)>0
+	return len(v.downloadFailed)+len(v.compileFailed)+len(v.stageFailed)>0
+}
+func (s *stats) fail(stage string, err error) {
+	if err == nil { return }
+	log.Printf("ERROR %s: %v", stage, err)
+	gha("error", fmt.Sprintf("%s: %v", stage, err))
+	s.add(&s.stageFailed, stage)
 }
 
 func gha(command, message string) {
@@ -125,10 +132,10 @@ func (d *downloader) one(ctx context.Context, name,url string) {
 			resp,err=d.client.Do(req)
 			if err==nil {
 				if resp.StatusCode<200 || resp.StatusCode>=300 { err=fmt.Errorf("HTTP %s",resp.Status); resp.Body.Close() } else {
-					data,readErr:=io.ReadAll(io.LimitReader(resp.Body,64<<20))
+					data,readErr:=io.ReadAll(io.LimitReader(resp.Body,(64<<20)+1))
 					resp.Body.Close()
 					err=readErr
-					if err==nil && len(data)>=64<<20 { err=errors.New("response exceeds 64 MiB") }
+					if err==nil && len(data)>64<<20 { err=errors.New("response exceeds 64 MiB") }
 					if err==nil { err=validateDownload(name,data) }
 					if err==nil { err=atomicWrite(filepath.Join(d.dir,name),data) }
 					if err==nil {
@@ -159,7 +166,14 @@ func validateDownload(name string,data []byte) error {
 		rules,ok:=doc["rules"].([]any); if !ok || len(rules)==0 { return errors.New("missing/non-empty rules array") }
 		for _,raw:=range rules {
 			rule,ok:=raw.(map[string]any); if !ok { continue }
-			if cidrs,ok:=rule["ip_cidr"].([]any); ok && len(cidrs)>0 { return nil }
+			if cidrs,ok:=rule["ip_cidr"].([]any); ok && len(cidrs)>0 {
+				valid := 0
+				for _, rawCIDR := range cidrs {
+					value, ok := rawCIDR.(string); if !ok { continue }
+					if _, err := netip.ParsePrefix(strings.TrimSpace(value)); err == nil { valid++ }
+				}
+				if valid > 0 { return nil }
+			}
 		}
 		return errors.New("missing non-empty rules[].ip_cidr")
 	}
@@ -179,6 +193,7 @@ func (d *downloader) all(ctx context.Context,sources map[string]string,workers i
 
 type cli struct { bin,dir string; dry bool }
 func (c *cli) check() error {
+	if c.dry { return nil }
 	if strings.ContainsRune(c.bin,filepath.Separator) {
 		if _,err:=os.Stat(c.bin); err!=nil { return fmt.Errorf("sing-box binary not found: %s",c.bin) }
 		return nil
@@ -223,20 +238,20 @@ func (b *builder) convertAndDecompile() {
 	group("Langkah 2: Konversi AdGuard & Decompile Facebook"); defer endGroup()
 	for _,item:=range []struct{file,kind string}{{"adguard-custom.txt","adguard"},{"adguard.txt","adguard"}} {
 		if _,err:=os.Stat(b.path(item.file)); err!=nil { log.Printf("WARNING skip missing %s",item.file); continue }
-		if err:=b.cli.convert(item.kind,item.file);err!=nil {log.Printf("WARNING convert %s: %v",item.file,err)}
+		if err:=b.cli.convert(item.kind,item.file);err!=nil { b.stats.fail("convert "+item.file, err); continue }
+		b.cleanup(item.file)
 	}
 	if _,err:=os.Stat(b.path("geoip-facebook.srs"));err==nil {
-		if err:=b.cli.decompile("geoip-facebook.srs","geoip-facebook.json");err!=nil {log.Printf("WARNING decompile facebook: %v",err)}
+		if err:=b.cli.decompile("geoip-facebook.srs","geoip-facebook.json");err!=nil { b.stats.fail("decompile geoip-facebook.srs", err) } else { b.cleanup("geoip-facebook.srs") }
 	} else { log.Println("WARNING geoip-facebook.srs missing") }
-	b.cleanup("adguard.txt","adguard-custom.txt","geoip-facebook.srs")
 }
 func (b *builder) buildDoH() {
 	group("Langkah 2b: Pemisahan doh.json"); defer endGroup()
-	doc,err:=b.load("doh.json"); if err!=nil {log.Printf("WARNING load doh.json: %v",err);return}
-	rule,err:=firstRule(doc);if err!=nil{log.Printf("WARNING doh.json: %v",err);return}
+	doc,err:=b.load("doh.json"); if err!=nil {b.stats.fail("load doh.json",err);return}
+	rule,err:=firstRule(doc);if err!=nil{b.stats.fail("parse doh.json",err);return}
 	if b.dry{return}
-	if err=b.write("geosite-doh.json",map[string]any{"version":3,"rules":[]any{map[string]any{"domain_suffix":stringsAt(rule["domain_suffix"])}}});err!=nil{log.Printf("ERROR write geosite-doh: %v",err);return}
-	if err=b.write("geoip-doh.json",map[string]any{"version":3,"rules":[]any{map[string]any{"ip_cidr":stringsAt(rule["ip_cidr"])}}});err!=nil{log.Printf("ERROR write geoip-doh: %v",err);return}
+	if err=b.write("geosite-doh.json",map[string]any{"version":3,"rules":[]any{map[string]any{"domain_suffix":stringsAt(rule["domain_suffix"])}}});err!=nil{b.stats.fail("write geosite-doh.json",err);return}
+	if err=b.write("geoip-doh.json",map[string]any{"version":3,"rules":[]any{map[string]any{"ip_cidr":stringsAt(rule["ip_cidr"])}}});err!=nil{b.stats.fail("write geoip-doh.json",err);return}
 	b.cleanup("doh.json")
 }
 func (b *builder) formatJSON() {
@@ -245,7 +260,7 @@ func (b *builder) formatJSON() {
 	for _,n:=range b.cfg.local{set[n]=true}
 	for n:=range b.cfg.sources{if strings.HasSuffix(n,".json")&&n!="doh.json"{set[n]=true}}
 	names:=make([]string,0,len(set));for n:=range set{names=append(names,n)};sort.Strings(names)
-	for _,n:=range names{if _,err:=os.Stat(b.path(n));err!=nil{b.stats.add(&b.stats.skipped,n);continue};if err:=b.cli.format(n);err!=nil{log.Printf("WARNING format %s: %v",n,err)}}
+	for _,n:=range names{if _,err:=os.Stat(b.path(n));err!=nil{b.stats.add(&b.stats.skipped,n);continue};if err:=b.cli.format(n);err!=nil{b.stats.fail("format "+n,err)}}
 }
 
 func sibling(p netip.Prefix) netip.Prefix {
@@ -293,25 +308,26 @@ func parseCIDRs(values []string)([]netip.Prefix,int) {
 func (b *builder) buildOnlyID() {
 	group("Langkah 4: Build geoip-onlyid.json");defer endGroup()
 	asn,err1:=b.load("geoip-asnid.json");id,err2:=b.load("geoip-id.json")
-	if err1!=nil||err2!=nil{log.Printf("ERROR load GeoIP sources: %v; %v",err1,err2);gha("error","geoip-asnid.json atau geoip-id.json tidak tersedia");return}
-	ar,e1:=firstRule(asn);ir,e2:=firstRule(id);if e1!=nil||e2!=nil{log.Printf("ERROR GeoIP rules: %v; %v",e1,e2);return}
+	if err1!=nil||err2!=nil{b.stats.fail("load GeoIP sources",fmt.Errorf("ASN: %v; country: %v",err1,err2));return}
+	ar,e1:=firstRule(asn);ir,e2:=firstRule(id);if e1!=nil||e2!=nil{b.stats.fail("parse GeoIP rules",fmt.Errorf("ASN: %v; country: %v",e1,e2));return}
 	raw:=append(stringsAt(ar["ip_cidr"]),stringsAt(ir["ip_cidr"])...)
 	prefixes,bad:=parseCIDRs(raw);optimized:=make([]string,0,len(prefixes));for _,p:=range prefixes{optimized=append(optimized,p.String())}
 	if bad>0{gha("warning",fmt.Sprintf("%d CIDR invalid diabaikan",bad))}
+	if len(prefixes)==0 { b.stats.fail("build geoip-onlyid.json",errors.New("no valid CIDR prefixes found")); return }
 	log.Printf("  CIDR: %d -> %d setelah optimasi",len(raw),len(optimized))
 	gha("notice",fmt.Sprintf("geoip-onlyid: %d CIDR -> %d (hemat %d)",len(raw),len(optimized),len(raw)-len(optimized)))
 	data:=map[string]any{"version":3,"rules":[]any{map[string]any{"type":"logical","mode":"and","rules":[]any{map[string]any{"ip_cidr":optimized},map[string]any{"port":b.cfg.onlyIDPorts}}}}}
-	if b.dry{return};if err:=b.write("geoip-onlyid.json",data);err!=nil{log.Printf("ERROR write geoip-onlyid: %v",err);return}
-	if err:=b.cli.format("geoip-onlyid.json");err!=nil{log.Printf("WARNING format geoip-onlyid: %v",err)}
+	if b.dry{return};if err:=b.write("geoip-onlyid.json",data);err!=nil{b.stats.fail("write geoip-onlyid.json",err);return}
+	if err:=b.cli.format("geoip-onlyid.json");err!=nil{b.stats.fail("format geoip-onlyid.json",err)}
 }
 func (b *builder) buildWALocal() {
 	group("Langkah 5: Build wa_local.json");defer endGroup()
-	doc,err:=b.load("geoip-facebook.json");if err!=nil{log.Printf("WARNING facebook geoip: %v",err);gha("error","geoip-facebook.json tidak tersedia untuk wa_local");return}
-	rule,err:=firstRule(doc);if err!=nil{log.Printf("WARNING facebook geoip: %v",err);return}
-	ips:=stringsAt(rule["ip_cidr"]);log.Printf("  IP Facebook: %d",len(ips))
+	doc,err:=b.load("geoip-facebook.json");if err!=nil{b.stats.fail("load geoip-facebook.json",err);return}
+	rule,err:=firstRule(doc);if err!=nil{b.stats.fail("parse geoip-facebook.json",err);return}
+	ips:=stringsAt(rule["ip_cidr"]);if len(ips)==0{b.stats.fail("build wa_local.json",errors.New("Facebook IP CIDR list is empty"));return};log.Printf("  IP Facebook: %d",len(ips))
 	data:=map[string]any{"version":3,"rules":[]any{map[string]any{"type":"logical","mode":"and","rules":[]any{map[string]any{"ip_cidr":ips},map[string]any{"port":b.cfg.waPorts}}}}}
-	if b.dry{return};if err:=b.write("wa_local.json",data);err!=nil{log.Printf("ERROR write wa_local: %v",err);return}
-	if err:=b.cli.format("wa_local.json");err!=nil{log.Printf("WARNING format wa_local: %v",err)}
+	if b.dry{return};if err:=b.write("wa_local.json",data);err!=nil{b.stats.fail("write wa_local.json",err);return}
+	if err:=b.cli.format("wa_local.json");err!=nil{b.stats.fail("format wa_local.json",err)}
 }
 func (b *builder) compileAll() {
 	group("Langkah 6: Compile ke .srs");defer endGroup()
@@ -333,10 +349,11 @@ func (b *builder) compileAll() {
 func writeSummary(s *stats,elapsed time.Duration) {
 	path:=os.Getenv("GITHUB_STEP_SUMMARY");if path==""{return}
 	v:=s.snapshot();status:="✅ Berhasil";if len(v.downloadFailed)+len(v.compileFailed)>0{status="❌ Ada Kegagalan"}
-	lines:=[]string{"## "+status+" — Sing-box Rule Set Builder",fmt.Sprintf("**Waktu build:** %s | **Durasi:** %.1fs",time.Now().UTC().Format("2006-01-02 15:04 UTC"),elapsed.Seconds()),"","| Metrik | Nilai |","|---|---|",fmt.Sprintf("| Download berhasil | %d/%d |",len(v.downloaded),len(v.downloaded)+len(v.downloadFailed)),fmt.Sprintf("| Download gagal | %d |",len(v.downloadFailed)),fmt.Sprintf("| Compile berhasil | %d |",len(v.compiled)),fmt.Sprintf("| Compile gagal | %d |",len(v.compileFailed)),fmt.Sprintf("| Dilewati | %d |",len(v.skipped))}
+	lines:=[]string{"## "+status+" — Sing-box Rule Set Builder",fmt.Sprintf("**Waktu build:** %s | **Durasi:** %.1fs",time.Now().UTC().Format("2006-01-02 15:04 UTC"),elapsed.Seconds()),"","| Metrik | Nilai |","|---|---|",fmt.Sprintf("| Download berhasil | %d/%d |",len(v.downloaded),len(v.downloaded)+len(v.downloadFailed)),fmt.Sprintf("| Download gagal | %d |",len(v.downloadFailed)),fmt.Sprintf("| Compile berhasil | %d |",len(v.compiled)),fmt.Sprintf("| Compile gagal | %d |",len(v.compileFailed)),fmt.Sprintf("| Dilewati | %d |",len(v.skipped)),fmt.Sprintf("| Kegagalan tahap | %d |",len(v.stageFailed))}
 	if len(v.compiled)>0{lines=append(lines,"","### File SRS yang Dihasilkan","```");for _,n:=range v.compiled{lines=append(lines,"  "+strings.TrimSuffix(n,".json")+".srs")};lines=append(lines,"```")}
 	if len(v.downloadFailed)>0{lines=append(lines,"","> ⚠️ **Gagal diunduh:** "+strings.Join(v.downloadFailed,", "))}
 	if len(v.compileFailed)>0{lines=append(lines,"> ⚠️ **Gagal dikompil:** "+strings.Join(v.compileFailed,", "))}
+	if len(v.stageFailed)>0{lines=append(lines,"> ⚠️ **Gagal tahap:** "+strings.Join(v.stageFailed,", "))}
 	if err:=os.WriteFile(path,[]byte(strings.Join(lines,"\n")+"\n"),0644);err!=nil{log.Printf("WARNING step summary: %v",err)}
 }
 
@@ -367,7 +384,7 @@ func run() int {
 		b.convertAndDecompile();b.buildDoH();b.formatJSON();b.buildOnlyID();b.buildWALocal();b.compileAll()
 	}
 	v:=s.snapshot();elapsed:=time.Since(start)
-	log.Printf("SUMMARY download=%d failed=%d compiled=%d compile_failed=%d skipped=%d",len(v.downloaded),len(v.downloadFailed),len(v.compiled),len(v.compileFailed),len(v.skipped))
+	log.Printf("SUMMARY download=%d failed=%d compiled=%d compile_failed=%d stage_failed=%d skipped=%d",len(v.downloaded),len(v.downloadFailed),len(v.compiled),len(v.compileFailed),len(v.stageFailed),len(v.skipped))
 	writeSummary(s,elapsed)
 	if s.failed(){gha("error","Build selesai dengan error. Periksa log.");return 1}
 	log.Printf("Build selesai dalam %.1fs",elapsed.Seconds());return 0
