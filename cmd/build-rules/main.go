@@ -348,7 +348,7 @@ func (b *builder) compileAll() {
 
 func writeSummary(s *stats,elapsed time.Duration) {
 	path:=os.Getenv("GITHUB_STEP_SUMMARY");if path==""{return}
-	v:=s.snapshot();status:="✅ Berhasil";if len(v.downloadFailed)+len(v.compileFailed)>0{status="❌ Ada Kegagalan"}
+	v:=s.snapshot();status:="✅ Berhasil";if len(v.downloadFailed)+len(v.compileFailed)+len(v.stageFailed)>0{status="❌ Ada Kegagalan"}
 	lines:=[]string{"## "+status+" — Sing-box Rule Set Builder",fmt.Sprintf("**Waktu build:** %s | **Durasi:** %.1fs",time.Now().UTC().Format("2006-01-02 15:04 UTC"),elapsed.Seconds()),"","| Metrik | Nilai |","|---|---|",fmt.Sprintf("| Download berhasil | %d/%d |",len(v.downloaded),len(v.downloaded)+len(v.downloadFailed)),fmt.Sprintf("| Download gagal | %d |",len(v.downloadFailed)),fmt.Sprintf("| Compile berhasil | %d |",len(v.compiled)),fmt.Sprintf("| Compile gagal | %d |",len(v.compileFailed)),fmt.Sprintf("| Dilewati | %d |",len(v.skipped)),fmt.Sprintf("| Kegagalan tahap | %d |",len(v.stageFailed))}
 	if len(v.compiled)>0{lines=append(lines,"","### File SRS yang Dihasilkan","```");for _,n:=range v.compiled{lines=append(lines,"  "+strings.TrimSuffix(n,".json")+".srs")};lines=append(lines,"```")}
 	if len(v.downloadFailed)>0{lines=append(lines,"","> ⚠️ **Gagal diunduh:** "+strings.Join(v.downloadFailed,", "))}
