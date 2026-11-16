@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -100,5 +102,23 @@ func TestCLIDryRunDoesNotRequireBinary(t *testing.T) {
 	c := &cli{bin: "binary-that-does-not-exist", dry: true}
 	if err := c.check(); err != nil {
 		t.Fatalf("dry-run check should not require sing-box binary: %v", err)
+	}
+}
+
+func TestConvertAndDecompileDryRunKeepsInputs(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "adguard.txt")
+	if err := os.WriteFile(input, []byte("example.com"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := &builder{
+		cfg: config{output: dir},
+		cli: &cli{bin: "unused", dir: dir, dry: true},
+		stats: &stats{},
+		dry: true,
+	}
+	b.convertAndDecompile()
+	if _, err := os.Stat(input); err != nil {
+		t.Fatalf("dry-run removed input file: %v", err)
 	}
 }
