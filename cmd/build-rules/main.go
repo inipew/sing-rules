@@ -248,7 +248,7 @@ func (b *builder) convertAndDecompile() {
 }
 func (b *builder) buildDoH() {
 	group("Langkah 2b: Pemisahan doh.json"); defer endGroup()
-	doc,err:=b.load("doh.json"); if err!=nil {b.stats.fail("load doh.json",err);return}
+	doc,err:=b.load("doh.json"); if err!=nil { if b.dry && errors.Is(err,os.ErrNotExist) { log.Println("[DRY-RUN] doh.json belum diunduh; transformasi dilewati."); return }; b.stats.fail("load doh.json",err);return }
 	rule,err:=firstRule(doc);if err!=nil{b.stats.fail("parse doh.json",err);return}
 	if b.dry{return}
 	if err=b.write("geosite-doh.json",map[string]any{"version":3,"rules":[]any{map[string]any{"domain_suffix":stringsAt(rule["domain_suffix"])}}});err!=nil{b.stats.fail("write geosite-doh.json",err);return}
@@ -309,7 +309,7 @@ func parseCIDRs(values []string)([]netip.Prefix,int) {
 func (b *builder) buildOnlyID() {
 	group("Langkah 4: Build geoip-onlyid.json");defer endGroup()
 	asn,err1:=b.load("geoip-asnid.json");id,err2:=b.load("geoip-id.json")
-	if err1!=nil||err2!=nil{b.stats.fail("load GeoIP sources",fmt.Errorf("ASN: %v; country: %v",err1,err2));return}
+	if err1!=nil||err2!=nil{ if b.dry && (errors.Is(err1,os.ErrNotExist)||errors.Is(err2,os.ErrNotExist)) { log.Println("[DRY-RUN] Sumber GeoIP belum diunduh; geoip-onlyid dilewati."); return }; b.stats.fail("load GeoIP sources",fmt.Errorf("ASN: %v; country: %v",err1,err2));return }
 	ar,e1:=firstRule(asn);ir,e2:=firstRule(id);if e1!=nil||e2!=nil{b.stats.fail("parse GeoIP rules",fmt.Errorf("ASN: %v; country: %v",e1,e2));return}
 	raw:=append(stringsAt(ar["ip_cidr"]),stringsAt(ir["ip_cidr"])...)
 	prefixes,bad:=parseCIDRs(raw);optimized:=make([]string,0,len(prefixes));for _,p:=range prefixes{optimized=append(optimized,p.String())}
@@ -323,7 +323,7 @@ func (b *builder) buildOnlyID() {
 }
 func (b *builder) buildWALocal() {
 	group("Langkah 5: Build wa_local.json");defer endGroup()
-	doc,err:=b.load("geoip-facebook.json");if err!=nil{b.stats.fail("load geoip-facebook.json",err);return}
+	doc,err:=b.load("geoip-facebook.json");if err!=nil{ if b.dry && errors.Is(err,os.ErrNotExist) { log.Println("[DRY-RUN] geoip-facebook.json belum tersedia; wa_local dilewati."); return }; b.stats.fail("load geoip-facebook.json",err);return }
 	rule,err:=firstRule(doc);if err!=nil{b.stats.fail("parse geoip-facebook.json",err);return}
 	ips:=stringsAt(rule["ip_cidr"]);if len(ips)==0{b.stats.fail("build wa_local.json",errors.New("Facebook IP CIDR list is empty"));return};log.Printf("  IP Facebook: %d",len(ips))
 	data:=map[string]any{"version":3,"rules":[]any{map[string]any{"type":"logical","mode":"and","rules":[]any{map[string]any{"ip_cidr":ips},map[string]any{"port":b.cfg.waPorts}}}}}
